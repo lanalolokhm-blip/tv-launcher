@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+:root{--bg1:#0a1a5c;--bg2:#050b2e;--card:rgba(255,255,255,.12);--acc:#ffd24d}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden;background:linear-gradient(160deg,var(--bg1),var(--bg2));color:#fff;font-family:sans-serif}
+#page{height:100%;padding:3vh 4vw;display:flex;flex-direction:column;gap:2.5vh;overflow-y:auto}
+#top{display:flex;justify-content:space-between;align-items:flex-start}
+#clock{font-size:8vh;font-weight:bold;direction:ltr}
+#date{font-size:3vh;opacity:.9}
+#next{font-size:3.2vh;color:var(--acc);text-align:left}
+#prayers{display:flex;gap:1.5vw}
+.pr{flex:1;background:var(--card);border-radius:14px;padding:1.4vh 1vw;text-align:center;font-size:2.6vh}
+.pr b{display:block;font-size:3vh;direction:ltr;margin-top:.4vh}
+.pr.on{outline:3px solid var(--acc)}
+h2{margin:0;font-size:2.8vh;color:var(--acc)}
+.row{display:flex;gap:1.4vw;overflow-x:auto;padding:1vh .5vw 1.5vh}
+.row::-webkit-scrollbar{display:none}
+button{font:inherit;color:#fff;border:0;cursor:pointer}
+button:focus{outline:4px solid var(--acc);transform:scale(1.08)}
+.mcard{min-width:17vw;height:15vh;border-radius:16px;font-size:3vh;background:linear-gradient(135deg,#1f7a6b,#0f3d5c);flex-shrink:0}
+.app{min-width:11vw;background:var(--card);border-radius:16px;padding:1.5vh 1vw;font-size:2.2vh;flex-shrink:0;display:flex;flex-direction:column;align-items:center;gap:1vh}
+.app img{width:9vh;height:9vh}
+#player{position:fixed;inset:0;display:none;align-items:flex-end;justify-content:center;background:#000 center/cover no-repeat;z-index:9}
+#player.show{display:flex}
+#ptitle{background:rgba(0,0,0,.6);width:100%;text-align:center;font-size:5vh;padding:3vh}
+#ptitle small{display:block;font-size:2.4vh;opacity:.8;margin-top:1vh}
+</style>
+</head>
+<body>
+<div id="page">
+  <div id="top">
+    <div><div id="clock">--:--</div><div id="date"></div></div>
+    <div id="next"></div>
+  </div>
+  <div id="prayers"></div>
+  <div><h2>الأذكار والقرآن</h2><div class="row" id="media"></div></div>
+  <div id="favwrap" style="display:none"><h2>المفضلة</h2><div class="row" id="fav"></div></div>
+  <div><h2>كل التطبيقات</h2><div class="row" id="apps"></div></div>
+</div>
+<div id="player"><div id="ptitle"></div></div>
+<audio id="aud"></audio>
+<audio id="adhan" src="media/adhan.mp3"></audio>
+
+<script>
+// ===== إعدادات يمكن تعديلها =====
+const CITY="Cairo", COUNTRY="Egypt", METHOD=5, TZ="Africa/Cairo";
+const MEDIA=[
+ {title:"أذكار الصباح",audio:"media/azkar_sabah.mp3",image:"media/azkar_sabah.jpg"},
+ {title:"أذكار المساء",audio:"media/azkar_masaa.mp3",image:"media/azkar_masaa.jpg"},
+ {title:"سورة البقرة",audio:"media/baqara.mp3",image:"media/baqara.jpg"},
+ {title:"سورة الكهف",audio:"media/kahf.mp3",image:"media/kahf.jpg"},
+ {title:"الرقية الشرعية",audio:"media/ruqya.mp3",image:"media/ruqya.jpg"}
+];
+const FAV_REGEX=/osn|yango|watch\s?it|واتش/i;
+// =================================
+const PR=[["Fajr","الفجر"],["Dhuhr","الظهر"],["Asr","العصر"],["Maghrib","المغرب"],["Isha","العشاء"]];
+let times=null, fired={};
+const $=id=>document.getElementById(id);
+
+function nowCairo(){
+  const p=new Intl.DateTimeFormat("en-GB",{timeZone:TZ,hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false}).formatToParts(new Date());
+  const g=t=>+p.find(x=>x.type===t).value;
+  return {h:g("hour")%24,m:g("minute"),s:g("second")};
+}
+function todayKey(){return new Intl.DateTimeFormat("en-CA",{timeZone:TZ}).format(new Date());}
+const pad=n=>String(n).padStart(2,"0");
+function fmt12(h,m){const ap=h>=12?"PM":"AM";return ((h+11)%12+1)+":"+pad(m)+" "+ap;}
+
+async function loadTimes(){
+  const key="t_"+todayKey();
+  try{
+    const r=await fetch(`https://api.aladhan.com/v1/timingsByCity?city=${CITY}&country=${COUNTRY}&method=${METHOD}`);
+    const j=await r.json();
+    const d={t:{},hijri:`${j.data.date.hijri.day} ${j.data.date.hijri.month.ar} ${j.data.date.hijri.year}`};
+    PR.forEach(([k])=>d.t[k]=j.data.timings[k].slice(0,5));
+    localStorage.setItem(key,JSON.stringify(d));
+    times=d;
+  }catch(e){
+    try{times=JSON.parse(localStorage.getItem(key));}catch(_){}
+  }
+  renderPrayers();
+}
+function renderPrayers(){
+  if(!times)return;
+  $("prayers").innerHTML=PR.map(([k,ar])=>{const [h,m]=times.t[k].split(":").map(Number);return `<div class="pr" id="p_${k}">${ar}<b>${fmt12(h,m)}</b></div>`}).join("");
+  $("date").textContent=times.hijri+" هـ";
+}
+function tick(){
+  const n=nowCairo();
+  $("clock").textContent=fmt12(n.h,n.m).replace(/ (AM|PM)/," $1");
+  if(!times)return;
+  const cur=n.h*60+n.m;
+  let next=null;
+  for(const [k,ar] of PR){
+    const [h,m]=times.t[k].split(":").map(Number);
+    const mins=h*60+m;
+    if(mins===cur && n.s<30){
+      const fk=todayKey()+k;
+      if(!fired[fk]){fired[fk]=1;playAdhan();}
+    }
+    if(!next && mins>cur) next={ar,diff:mins-cur};
+  }
+  if(!next){const [h,m]=times.t.Fajr.split(":").map(Number);next={ar:"الفجر",diff:h*60+m+1440-cur};}
+  $("next").innerHTML=`الصلاة القادمة: ${next.ar}<br>بعد ${Math.floor(next.diff/60)} س ${next.diff%60} د`;
+  PR.forEach(([k])=>{const el=$("p_"+k);if(el)el.classList.toggle("on",next.ar===PR.find(x=>x[0]===k)[1]);});
+}
+function playAdhan(){
+  closePlayer();
+  const a=$("adhan");a.currentTime=0;a.play().catch(()=>{});
+}
+function openMedia(i){
+  const it=MEDIA[i],a=$("aud"),p=$("player");
+  $("adhan").pause();
+  a.src=it.audio;a.play().catch(()=>{});
+  p.style.backgroundImage=`url(${it.image}),linear-gradient(160deg,#0a1a5c,#050b2e)`;
+  $("ptitle").innerHTML=`${it.title}<small>اضغط رجوع للإغلاق</small>`;
+  p.classList.add("show");
+}
+function closePlayer(){
+  const a=$("aud");a.pause();$("player").classList.remove("show");
+  const f=document.querySelector(".mcard");if(f)f.focus();
+}
+function handleBack(){
+  if($("player").classList.contains("show"))closePlayer();
+  else {$("adhan").pause();window.scrollTo(0,0);}
+}
+function appCard(a){
+  const b=document.createElement("button");
+  b.className="app";
+  b.innerHTML=`<img src="data:image/png;base64,${a.icon}"><span>${a.label}</span>`;
+  b.onclick=()=>Android.launch(a.pkg);
+  return b;
+}
+function refreshApps(){
+  let list=[];
+  try{list=JSON.parse(Android.getApps());}catch(e){}
+  list.sort((a,b)=>a.label.localeCompare(b.label));
+  const apps=$("apps"),fav=$("fav");
+  apps.innerHTML="";fav.innerHTML="";
+  let nf=0;
+  list.forEach(a=>{
+    if(FAV_REGEX.test(a.label)){fav.appendChild(appCard(a));nf++;}
+    apps.appendChild(appCard(a));
+  });
+  $("favwrap").style.display=nf?"block":"none";
+}
+window.addEventListener("keydown",e=>{if(e.key==="Escape"||e.key==="Backspace")handleBack();});
+
+$("media").innerHTML=MEDIA.map((m,i)=>`<button class="mcard" onclick="openMedia(${i})">${m.title}</button>`).join("");
+refreshApps();loadTimes();
+setInterval(tick,1000);tick();
+setInterval(loadTimes,6*3600*1000);
+setTimeout(()=>{const f=document.querySelector(".mcard");if(f)f.focus();},500);
+</script>
+</body>
+</html>
